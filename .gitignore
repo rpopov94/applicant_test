@@ -1,0 +1,7 @@
+.idea/**
+
+*.db
+*.xml
+
+.venv/*
+*.pyw
