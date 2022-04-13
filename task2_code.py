@@ -1,89 +1,103 @@
+import os
+import logging
 import json
-import time
+from datetime import datetime
+from dotenv import load_dotenv
 
 
-async def create_tables(db):
-    await db.execute("""create table error_status
-    (
-        occurred_at integer,
-        object varchar,
-        errors_tuple json,
-        object_id integer default 0
-    );
-    create table object_status
-    (
-        occurred_at integer,
-        online integer,
-        ping integer,
-        object varchar,
-        obj_id integer default 0
-    );
-    """)
+basedir = os.path.abspath(os.path.dirname(__file__))
+load_dotenv(os.path.join(basedir, '.env'))
 
 
-async def accept_status(db, **kwargs):
+async def create_tables(cursor):
+    await cursor.execute("""
+            create table if not exists object_status
+            (
+                object_id INTEGER AUTO_INCREMENT PRIMARY KEY
+                occurred_at INTEGER,
+                online INTEGER,
+                ping INTEGER,
+                object VARCHAR(255),
+                
+            );""")
+    await  cursor.execute("""
+            create table if not exists error_status
+            (
+                FOREIGN KEY (object_id) REFERENCES error_status(object_id)
+                occurred_at INTEGER ,
+                object VARCHAR(255),
+                errors_tuple JSON,
+                object_id VARCHAR(255),
+            );""")
+
+
+async def accept_status(cursor, **kwargs):
     errors = {}
     ping, online = None, None
     try:
-        ping, online = kwargs["ping"], kwargs["online"]
-        if ping < 0:
+        if kwargs["ping"] < 0:
             errors["ping"] = {"error": "ping < 0"}
-        if online not in (0, 1):
+        if kwargs["online"] not in (0, 1):
             errors["online"] = {"error": "online not in (0, 1)"}
     except Exception as e:
         errors["parse"] = str(e)
-
     if errors:
-        await db.execute(f"""INSERT INTO public.error_status (occurred_at, object, errors_tuple, object_id) 
-            VALUES ({time.time()}, '{kwargs["object"]}', '{json.dumps(errors)}', {kwargs["object_id"]});
-        """)
+        await cursor.execute("""
+                INSERT INTO 
+                    public.error_status (occurred_at, object, errors_tuple, object_id) 
+                VALUES (?, ?, ?, ?) """,
+                             (datetime.now(), kwargs["object"],
+                              json.dumps(errors), kwargs["object_id"]))
     else:
-        await db.execute(f"""INSERT INTO public.object_status (occurred_at, object, obj_id, online, ping) 
-            VALUES ({time.time()}, '{kwargs["object"]}', {kwargs["object_id"]}, {online}, {ping});
-        """)
+        await cursor.execute(f"""
+            INSERT INTO 
+                public.object_status (occurred_at, object, obj_id, online, ping) 
+            VALUES 
+                (?, ?, ?, ?, ?);
+        """, (datetime.now(), kwargs["object"], kwargs["object_id"], online, ping))
+        await cursor.commit()
 
 
 async def check_token(token):
-    if token != "super_secret_valid_token":
-        raise ValueError("invalid token")
+    if token != os.environ.get('TOKEN'):
+        return True
+    logging.error("invalid token")
+    return False
 
 
-async def get_statuses(db, **kwargs):
+async def get_statuses(cursor, **kwargs):
     try:
-        await check_token(str(kwargs["token"]))
-        object_id = int(kwargs["object_id"])
-        _object = str(kwargs.get("object", "server"))
-    except BaseException:
-        print("bad args")
-        raise ValueError
-    return [list(row) for row in await db.fetch(f"""SELECT occurred_at, online, ping, object, obj_id
-        FROM object_status WHERE object = '{_object}' AND obj_id = '{object_id}'
-        ORDER BY occurred_at
-    """)]
+        if await check_token(str(kwargs["TOKEN"])):
+            await cursor.execute(
+                """
+                SELECT occurred_at, online, ping, object, obj_id
+                FROM object_status 
+                WHERE object = %(_object)s AND obj_id = %(object_id)s
+                ORDER BY occurred_at
+                """, {'_object': str(kwargs.get("object", "server")),
+                      'object_id': int(kwargs["object_id"])})
+    except KeyError:
+        logging.error("invalid token")
+    return cursor.fetchall()
 
 
-async def get_statuses_errors_by_occurred_at(db, **kwargs):
+async def get_statuses_errors_by_occurred_at(cursor, **kwargs):
     try:
-        await check_token(str(kwargs["token"]))
-        object_id = int(kwargs["object_id"])
-        start_at = int(kwargs["start_at"])
-        end_at = int(kwargs["end_at"])
-        _object = str(kwargs.get("object", "server"))
-        field = str(kwargs.get("field", "ping"))
-    except BaseException:
-        print("bad args")
-        raise ValueError
-    sql = f"""SELECT occurred_at, object, errors_tuple
-        FROM error_status WHERE object_id = {object_id}
-        AND occurred_at > {start_at} AND occurred_at < {end_at}
-        AND errors_tuple ->> '{field}' != '' AND object = '{_object}'
-        ORDER BY occurred_at
-    """
-    data = await db.fetch(sql)
-    result = []
-    for row in data:
-        (occurred_at, _object, errors_tuple) = row
-        errors = eval(errors_tuple)
-        result += [{"object": _object, "occurred_at": occurred_at, "error": y["error"]} for x, y in errors.items()]
-    return result
-
+        if await check_token(str(kwargs["TOKEN"])):
+            await cursor.execute("""
+                        SELECT 
+                            occurred_at, object, errors_tuple
+                       FROM error_status WHERE object_id = %(object_id)s
+                           AND occurred_at > %(start_at)s AND occurred_at < %(end_at)s
+                           AND errors_tuple > %(field)s != '' AND object = %(_object)s
+                      ORDER BY occurred_at
+                    """, {
+                'object_id': int(kwargs["object_id"]),
+                'start_at': int(kwargs["start_at"]),
+                'end_at:': int(kwargs["end_at"]),
+                'field': str(kwargs.get("field", "ping")),
+                '_object': str(kwargs.get("object", "server"))
+            })
+    except KeyError:
+        logging.error("invalid token")
+    return cursor.fetchall()
