@@ -55,7 +55,7 @@ async def accept_status(cursor, **kwargs):
             VALUES 
                 (?, ?, ?, ?, ?);
         """, (datetime.now(), kwargs["object"], kwargs["object_id"], online, ping))
-        await cursor.commit()
+    await cursor.commit()
 
 
 async def check_token(token):
