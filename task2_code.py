@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 import json
 from datetime import datetime
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ load_dotenv(os.path.join(basedir, '.env'))
 
 
 async def create_tables(cursor):
-    await cursor.execute("""
+    tab_1 = asyncio.create_task(cursor.execute("""
             create table if not exists object_status
             (
                 object_id INTEGER AUTO_INCREMENT PRIMARY KEY
@@ -19,8 +20,8 @@ async def create_tables(cursor):
                 ping INTEGER,
                 object VARCHAR(255),
                 
-            );""")
-    await  cursor.execute("""
+            );"""))
+    tab_2 = asyncio.create_task(cursor.execute("""
             create table if not exists error_status
             (
                 FOREIGN KEY (object_id) REFERENCES error_status(object_id)
@@ -28,7 +29,8 @@ async def create_tables(cursor):
                 object VARCHAR(255),
                 errors_tuple JSON,
                 object_id VARCHAR(255),
-            );""")
+            );"""))
+    await asyncio.gather(tab_1, tab_2)
 
 
 async def accept_status(cursor, **kwargs):
